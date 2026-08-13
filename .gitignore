@@ -13,6 +13,7 @@ env/
 # data/sample/ holds small illustrative extracts and IS committed
 data/raw/*.csv
 data/processed/*.csv
+data/processed/*.json
 *.db
 *.sqlite
 *.sqlite3
