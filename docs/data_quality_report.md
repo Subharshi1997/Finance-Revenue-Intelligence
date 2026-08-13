@@ -1,6 +1,6 @@
 # Data Quality Report
 
-Generated: 2026-08-13 19:10
+Generated: 2026-08-13 19:22
 
 This report covers the 9 raw finance tables before cleaning. See 'Cleaning actions applied' for what was corrected before loading into the SQL database, and 'Cross-table finance checks' for business exceptions that are intentionally preserved for downstream analysis.
 
@@ -147,7 +147,7 @@ None found
 Rows: 37,172
 
 **Missing required values**
-None found
+- merchant_id: 329
 
 **Duplicate primary key rows**
 0
@@ -280,15 +280,19 @@ Only genuine ingestion garbage was corrected before loading into the SQL databas
 **invoices**: 20,200 -> 20,200 rows
 - incomplete_invoice_amounts_recovered_from_expected_fee: 20
 
+**payments**: 19,959 -> 19,938 rows
+- missing_payment_amount_rows_dropped: 21
+
+**credit_notes**: 1,695 -> 1,684 rows
+- missing_credit_amount_rows_dropped: 11
+
+**refunds**: 37,172 -> 36,837 rows
+- missing_merchant_id_rows_dropped: 329
+- orphaned_by_upstream_transaction_cleaning_dropped: 6
+
 **merchants**: 950 -> 950 rows
 
 **contracts**: 1,155 -> 1,155 rows
-
-**payments**: 19,959 -> 19,959 rows
-
-**refunds**: 37,172 -> 37,172 rows
-
-**credit_notes**: 1,695 -> 1,695 rows
 
 **collection_activity**: 12,300 -> 12,300 rows
 

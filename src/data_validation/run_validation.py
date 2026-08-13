@@ -48,8 +48,13 @@ def clean_all_tables(tables: dict[str, pd.DataFrame]) -> tuple[dict[str, pd.Data
 
     cleaned["transactions"], stats["transactions"] = cleaning.clean_transactions(tables["transactions"])
     cleaned["invoices"], stats["invoices"] = cleaning.clean_invoices(tables["invoices"])
+    cleaned["payments"], stats["payments"] = cleaning.clean_payments(tables["payments"])
+    cleaned["credit_notes"], stats["credit_notes"] = cleaning.clean_credit_notes(tables["credit_notes"])
 
-    for name in ["merchants", "contracts", "payments", "refunds", "credit_notes", "collection_activity", "disputes"]:
+    valid_transaction_ids = set(cleaned["transactions"]["transaction_id"])
+    cleaned["refunds"], stats["refunds"] = cleaning.clean_refunds(tables["refunds"], valid_transaction_ids)
+
+    for name in ["merchants", "contracts", "collection_activity", "disputes"]:
         id_col = TABLE_SPECS[name]["id_col"]
         cleaned[name], stats[name] = cleaning.dedupe_by_primary_key(tables[name], id_col)
 

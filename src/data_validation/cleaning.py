@@ -73,6 +73,64 @@ def clean_invoices(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return df, stats
 
 
+def clean_payments(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    before = len(df)
+    stats = {}
+
+    df = df.drop_duplicates(subset=["payment_id"], keep="first")
+    stats["duplicate_payment_id_rows_dropped"] = before - len(df)
+
+    # A payment row with no amount can't be posted to the ledger and can't be
+    # recovered from any other field - Finance would kick it back for manual
+    # investigation rather than guess, so it is dropped rather than imputed.
+    n_missing_amount = df["payment_amount"].isna().sum()
+    df = df[df["payment_amount"].notna()]
+    stats["missing_payment_amount_rows_dropped"] = int(n_missing_amount)
+
+    stats["rows_before"] = before
+    stats["rows_after"] = len(df)
+    return df, stats
+
+
+def clean_credit_notes(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    before = len(df)
+    stats = {}
+
+    df = df.drop_duplicates(subset=["credit_note_id"], keep="first")
+    stats["duplicate_credit_note_id_rows_dropped"] = before - len(df)
+
+    n_missing_amount = df["credit_amount"].isna().sum()
+    df = df[df["credit_amount"].notna()]
+    stats["missing_credit_amount_rows_dropped"] = int(n_missing_amount)
+
+    stats["rows_before"] = before
+    stats["rows_after"] = len(df)
+    return df, stats
+
+
+def clean_refunds(df: pd.DataFrame, valid_transaction_ids: set) -> tuple[pd.DataFrame, dict]:
+    before = len(df)
+    stats = {}
+
+    df = df.drop_duplicates(subset=["refund_id"], keep="first")
+    stats["duplicate_refund_id_rows_dropped"] = before - len(df)
+
+    n_missing_merchant = df["merchant_id"].isna().sum()
+    df = df[df["merchant_id"].notna()]
+    stats["missing_merchant_id_rows_dropped"] = int(n_missing_merchant)
+
+    # A refund whose parent transaction was dropped during transaction
+    # cleaning (duplicate/orphan/negative-amount) can no longer be tied to a
+    # real order and must be dropped to keep the transaction_id foreign key valid.
+    n_orphaned = (~df["transaction_id"].isin(valid_transaction_ids)).sum()
+    df = df[df["transaction_id"].isin(valid_transaction_ids)]
+    stats["orphaned_by_upstream_transaction_cleaning_dropped"] = int(n_orphaned)
+
+    stats["rows_before"] = before
+    stats["rows_after"] = len(df)
+    return df, stats
+
+
 def dedupe_by_primary_key(df: pd.DataFrame, id_col: str) -> tuple[pd.DataFrame, dict]:
     before = len(df)
     df = df.drop_duplicates(subset=[id_col], keep="first")

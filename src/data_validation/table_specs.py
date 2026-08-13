@@ -70,7 +70,7 @@ TABLE_SPECS = {
     },
     "refunds": {
         "id_col": "refund_id",
-        "required": ["refund_id", "transaction_id", "refund_amount"],
+        "required": ["refund_id", "transaction_id", "merchant_id", "refund_amount"],
         "date_cols": ["refund_date"],
         "negative_cols": ["refund_amount"],
         "range_checks": [],
