@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Environment
+.venv/
+venv/
+env/
+.env
+
+# Generated data (large, reproducible via scripts)
+# data/sample/ holds small illustrative extracts and IS committed
+data/raw/*.csv
+data/processed/*.csv
+*.db
+*.sqlite
+*.sqlite3
+
+# Excel/PowerBI working files
+excel/~$*
+powerbi/*.pbix
+
+# OS
+.DS_Store
+Thumbs.db

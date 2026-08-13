@@ -1,0 +1,10 @@
+pandas==2.1.4
+numpy==1.26.2
+matplotlib==3.8.2
+scikit-learn==1.9.0
+sqlalchemy==2.0.23
+xgboost==3.2.0
+openpyxl==3.1.2
+xlsxwriter
+pytest==7.4.3
+faker
