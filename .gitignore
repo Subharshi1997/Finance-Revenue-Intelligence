@@ -14,6 +14,7 @@ env/
 data/raw/*.csv
 data/processed/*.csv
 data/processed/*.json
+data/processed/powerbi/*.csv
 *.db
 *.sqlite
 *.sqlite3
