@@ -144,3 +144,205 @@ def engine():
     CREDIT_NOTES.to_sql("credit_notes", eng, if_exists="append", index=False)
     COLLECTION_ACTIVITY.to_sql("collection_activity", eng, if_exists="append", index=False)
     return eng
+
+
+# ---------------------------------------------------------------------------
+# Richer fixture for billing / reconciliation / revenue-leakage / revenue-
+# realization engines, which need transactions and contracts in addition to
+# invoices/payments/credit_notes.
+# ---------------------------------------------------------------------------
+
+FULL_SCHEMA = """
+CREATE TABLE merchants (
+    merchant_id TEXT PRIMARY KEY,
+    merchant_name TEXT,
+    merchant_segment TEXT,
+    payment_terms_days INTEGER,
+    merchant_status TEXT
+);
+CREATE TABLE contracts (
+    contract_id TEXT PRIMARY KEY,
+    merchant_id TEXT,
+    effective_from TEXT,
+    effective_to TEXT,
+    transaction_fee_percent REAL
+);
+CREATE TABLE transactions (
+    transaction_id TEXT PRIMARY KEY,
+    merchant_id TEXT,
+    transaction_date TEXT,
+    transaction_amount REAL,
+    transaction_fee_percent REAL,
+    expected_platform_fee REAL,
+    payment_status TEXT,
+    refund_amount REAL
+);
+CREATE TABLE invoices (
+    invoice_id TEXT PRIMARY KEY,
+    merchant_id TEXT,
+    billing_period_start TEXT,
+    invoice_date TEXT,
+    due_date TEXT,
+    total_invoice_amount REAL,
+    expected_fee REAL,
+    billed_fee REAL,
+    invoice_status TEXT,
+    invoice_error_flag INTEGER
+);
+CREATE TABLE payments (
+    payment_id TEXT PRIMARY KEY,
+    invoice_id TEXT,
+    merchant_id TEXT,
+    payment_date TEXT,
+    payment_amount REAL,
+    payment_status TEXT,
+    settlement_date TEXT
+);
+CREATE TABLE credit_notes (
+    credit_note_id TEXT PRIMARY KEY,
+    invoice_id TEXT,
+    merchant_id TEXT,
+    credit_amount REAL,
+    status TEXT
+);
+"""
+
+FULL_MERCHANTS = pd.DataFrame([
+    {"merchant_id": "MA", "merchant_name": "Alpha Retail", "merchant_segment": "Enterprise",
+     "payment_terms_days": 15, "merchant_status": "Active"},
+    {"merchant_id": "MB", "merchant_name": "Beta Stores", "merchant_segment": "SMB",
+     "payment_terms_days": 15, "merchant_status": "Active"},
+])
+
+FULL_CONTRACTS = pd.DataFrame([
+    # far enough in the past that Jan/Feb invoices are not "near" it - only
+    # CT2's 2026-03-01 transition should trigger the Pricing Mismatch path
+    {"contract_id": "CT1", "merchant_id": "MA", "effective_from": "2025-06-01",
+     "effective_to": "2026-02-28", "transaction_fee_percent": 2.0},
+    # rate change effective 2026-03-01 - anchors the Pricing Mismatch test
+    {"contract_id": "CT2", "merchant_id": "MA", "effective_from": "2026-03-01",
+     "effective_to": None, "transaction_fee_percent": 2.5},
+    {"contract_id": "CT3", "merchant_id": "MB", "effective_from": "2026-01-01",
+     "effective_to": None, "transaction_fee_percent": 3.0},
+])
+
+FULL_TRANSACTIONS = pd.DataFrame([
+    {"transaction_id": "T1", "merchant_id": "MA", "transaction_date": "2026-01-15",
+     "transaction_amount": 10000.0, "transaction_fee_percent": 2.0, "expected_platform_fee": 200.0,
+     "payment_status": "Success", "refund_amount": 0.0},
+    {"transaction_id": "T2", "merchant_id": "MA", "transaction_date": "2026-02-15",
+     "transaction_amount": 10000.0, "transaction_fee_percent": 2.0, "expected_platform_fee": 200.0,
+     "payment_status": "Success", "refund_amount": 0.0},
+    # checkout applied the stale 2.0% rate but the correct new-contract rate is 2.5% -
+    # a caught near-miss (invoicing bills on expected_platform_fee, the correct rate)
+    {"transaction_id": "T3", "merchant_id": "MA", "transaction_date": "2026-03-10",
+     "transaction_amount": 10000.0, "transaction_fee_percent": 2.0, "expected_platform_fee": 250.0,
+     "payment_status": "Success", "refund_amount": 0.0},
+    # partially refunded transaction, fee-on-refund never credited back
+    {"transaction_id": "T4", "merchant_id": "MB", "transaction_date": "2026-01-20",
+     "transaction_amount": 5000.0, "transaction_fee_percent": 3.0, "expected_platform_fee": 150.0,
+     "payment_status": "Success", "refund_amount": 1000.0},
+    # April transactions for MA with no invoice ever cut -> Missing Invoice
+    {"transaction_id": "T5", "merchant_id": "MA", "transaction_date": "2026-04-05",
+     "transaction_amount": 8000.0, "transaction_fee_percent": 2.5, "expected_platform_fee": 200.0,
+     "payment_status": "Success", "refund_amount": 0.0},
+])
+
+FULL_INVOICES = pd.DataFrame([
+    # Correct
+    {"invoice_id": "INV_A_JAN", "merchant_id": "MA", "billing_period_start": "2026-01-01",
+     "invoice_date": "2026-02-01", "due_date": "2026-02-15", "total_invoice_amount": 200.0,
+     "expected_fee": 200.0, "billed_fee": 200.0, "invoice_status": "Issued", "invoice_error_flag": 0},
+    # Underbilled (not near any contract transition)
+    {"invoice_id": "INV_A_FEB", "merchant_id": "MA", "billing_period_start": "2026-02-01",
+     "invoice_date": "2026-03-01", "due_date": "2026-03-15", "total_invoice_amount": 150.0,
+     "expected_fee": 200.0, "billed_fee": 150.0, "invoice_status": "Issued", "invoice_error_flag": 1},
+    # Underbilled AND right at the 2026-03-01 contract transition -> Pricing Mismatch
+    {"invoice_id": "INV_A_MAR", "merchant_id": "MA", "billing_period_start": "2026-03-01",
+     "invoice_date": "2026-04-01", "due_date": "2026-04-15", "total_invoice_amount": 200.0,
+     "expected_fee": 250.0, "billed_fee": 200.0, "invoice_status": "Issued", "invoice_error_flag": 1},
+    # MB January invoice - correct billing, but its transaction (T4) was refunded
+    # without crediting back the fee -> refund-fee-retention review item
+    {"invoice_id": "INV_B_JAN", "merchant_id": "MB", "billing_period_start": "2026-01-01",
+     "invoice_date": "2026-02-01", "due_date": "2026-02-10", "total_invoice_amount": 150.0,
+     "expected_fee": 150.0, "billed_fee": 150.0, "invoice_status": "Issued", "invoice_error_flag": 0},
+    # ---- reconciliation-focused invoices (unrelated billing amounts) ----
+    {"invoice_id": "INV_R1", "merchant_id": "MA", "billing_period_start": "2026-05-01",
+     "invoice_date": "2026-05-01", "due_date": "2026-05-15", "total_invoice_amount": 1000.0,
+     "expected_fee": 1000.0, "billed_fee": 1000.0, "invoice_status": "Issued", "invoice_error_flag": 0},
+    {"invoice_id": "INV_R2", "merchant_id": "MA", "billing_period_start": "2026-05-01",
+     "invoice_date": "2026-05-01", "due_date": "2026-05-15", "total_invoice_amount": 1000.0,
+     "expected_fee": 1000.0, "billed_fee": 1000.0, "invoice_status": "Issued", "invoice_error_flag": 0},
+    {"invoice_id": "INV_R3", "merchant_id": "MA", "billing_period_start": "2026-05-01",
+     "invoice_date": "2026-05-01", "due_date": "2026-05-15", "total_invoice_amount": 1200.0,
+     "expected_fee": 1200.0, "billed_fee": 1200.0, "invoice_status": "Issued", "invoice_error_flag": 0},
+    {"invoice_id": "INV_R4", "merchant_id": "MA", "billing_period_start": "2026-05-01",
+     "invoice_date": "2026-05-01", "due_date": "2026-05-15", "total_invoice_amount": 1000.0,
+     "expected_fee": 1000.0, "billed_fee": 1000.0, "invoice_status": "Issued", "invoice_error_flag": 0},
+    {"invoice_id": "INV_R5", "merchant_id": "MA", "billing_period_start": "2026-05-01",
+     "invoice_date": "2026-05-01", "due_date": "2026-05-15", "total_invoice_amount": 1000.0,
+     "expected_fee": 1000.0, "billed_fee": 1000.0, "invoice_status": "Issued", "invoice_error_flag": 0},
+    {"invoice_id": "INV_R6", "merchant_id": "MA", "billing_period_start": "2026-05-01",
+     "invoice_date": "2026-05-01", "due_date": "2026-05-15", "total_invoice_amount": 1000.0,
+     "expected_fee": 1000.0, "billed_fee": 1000.0, "invoice_status": "Issued", "invoice_error_flag": 0},
+    {"invoice_id": "INV_R7", "merchant_id": "MA", "billing_period_start": "2026-05-01",
+     "invoice_date": "2026-05-01", "due_date": "2026-05-15", "total_invoice_amount": 500.0,
+     "expected_fee": 500.0, "billed_fee": 500.0, "invoice_status": "Void", "invoice_error_flag": 0},
+])
+
+FULL_PAYMENTS = pd.DataFrame([
+    # INV_R1: exact match -> MATCHED
+    {"payment_id": "PR1", "invoice_id": "INV_R1", "merchant_id": "MA", "payment_date": "2026-05-20",
+     "payment_amount": 1000.0, "payment_status": "Success", "settlement_date": "2026-05-21"},
+    # INV_R2: no payments at all -> MISSING_PAYMENT
+    # INV_R3: two payments of the same amount -> DUPLICATE
+    {"payment_id": "PR3A", "invoice_id": "INV_R3", "merchant_id": "MA", "payment_date": "2026-05-20",
+     "payment_amount": 600.0, "payment_status": "Success", "settlement_date": "2026-05-21"},
+    {"payment_id": "PR3B", "invoice_id": "INV_R3", "merchant_id": "MA", "payment_date": "2026-05-21",
+     "payment_amount": 600.0, "payment_status": "Success", "settlement_date": "2026-05-22"},
+    # INV_R4: overpaid -> AMOUNT_MISMATCH
+    {"payment_id": "PR4", "invoice_id": "INV_R4", "merchant_id": "MA", "payment_date": "2026-05-20",
+     "payment_amount": 1500.0, "payment_status": "Success", "settlement_date": "2026-05-21"},
+    # INV_R5: settled before it was paid -> TIMING_MISMATCH
+    {"payment_id": "PR5", "invoice_id": "INV_R5", "merchant_id": "MA", "payment_date": "2026-05-20",
+     "payment_amount": 1000.0, "payment_status": "Success", "settlement_date": "2026-05-18"},
+    # INV_R6: partial payment -> PARTIAL
+    {"payment_id": "PR6", "invoice_id": "INV_R6", "merchant_id": "MA", "payment_date": "2026-05-20",
+     "payment_amount": 400.0, "payment_status": "Success", "settlement_date": "2026-05-21"},
+    # INV_R7 is Void - a payment here should still resolve to VOID at invoice level
+    {"payment_id": "PR7", "invoice_id": "INV_R7", "merchant_id": "MA", "payment_date": "2026-05-20",
+     "payment_amount": 500.0, "payment_status": "Success", "settlement_date": "2026-05-21"},
+    # Orphan payment - no invoice_id at all
+    {"payment_id": "PORPHAN", "invoice_id": None, "merchant_id": "MA", "payment_date": "2026-05-20",
+     "payment_amount": 250.0, "payment_status": "Success", "settlement_date": "2026-05-21"},
+    # Unmatched payment - references an invoice_id that does not exist
+    {"payment_id": "PGHOST", "invoice_id": "INV_GHOST", "merchant_id": "MA", "payment_date": "2026-05-20",
+     "payment_amount": 100.0, "payment_status": "Success", "settlement_date": "2026-05-21"},
+    # A failed payment attempt - should not affect invoice-level status
+    {"payment_id": "PFAIL", "invoice_id": "INV_R2", "merchant_id": "MA", "payment_date": "2026-05-10",
+     "payment_amount": 1000.0, "payment_status": "Failed", "settlement_date": None},
+])
+
+FULL_CREDIT_NOTES = pd.DataFrame([
+    # Credit note against the underbilled-but-not-near-transition invoice -> Recovered
+    {"credit_note_id": "FCN1", "invoice_id": "INV_A_FEB", "merchant_id": "MA",
+     "credit_amount": 50.0, "status": "Applied"},
+    # No credit note issued against INV_B_JAN despite the refund on T4 -> leakage stays open
+])
+
+
+@pytest.fixture()
+def full_engine():
+    eng = create_engine("sqlite:///:memory:")
+    with eng.begin() as conn:
+        for statement in FULL_SCHEMA.split(";"):
+            statement = statement.strip()
+            if statement:
+                conn.execute(text(statement))
+    FULL_MERCHANTS.to_sql("merchants", eng, if_exists="append", index=False)
+    FULL_CONTRACTS.to_sql("contracts", eng, if_exists="append", index=False)
+    FULL_TRANSACTIONS.to_sql("transactions", eng, if_exists="append", index=False)
+    FULL_INVOICES.to_sql("invoices", eng, if_exists="append", index=False)
+    FULL_PAYMENTS.to_sql("payments", eng, if_exists="append", index=False)
+    FULL_CREDIT_NOTES.to_sql("credit_notes", eng, if_exists="append", index=False)
+    return eng
